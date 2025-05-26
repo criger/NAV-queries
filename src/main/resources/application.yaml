@@ -1,0 +1,6 @@
+nav:
+  tokenURI: https://pam-stilling-feed.nav.no/api/publicToken # gyldig i ca 30 dager, men uvisst om den fornyes ved utløp eller før
+  timeOutLimit: 30
+  baseURI: https://pam-stilling-feed.nav.no/api/v1/
+  rateLimitDelay: 50 # setter denne til standard 50 som da er i millisekunder. Brukes når koden paginerer seg videre og delay er tenkt å brukes for å unngå 'HTTP 429 - Too Many Request'
+  monthsBackInTime: 6
