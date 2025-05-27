@@ -1,20 +1,19 @@
 package com.nav.work.models;
 
 import lombok.Builder;
-import lombok.Getter;
-import lombok.Setter;
 
 @Builder
 public class AnnonserPrUke
 {
+    private String uke;
+    private int antallKotlin;
+    private int antallJava;
+
     public AnnonserPrUke(String uke, int antallKotlin, int antallJava) {
         this.uke = uke;
         this.antallKotlin = antallKotlin;
         this.antallJava = antallJava;
     }
-
-    private String uke;
-    private int antallKotlin;
 
     public String getUke() {
         return uke;
@@ -40,5 +39,4 @@ public class AnnonserPrUke
         this.antallJava = antallJava;
     }
 
-    private int antallJava;
 }

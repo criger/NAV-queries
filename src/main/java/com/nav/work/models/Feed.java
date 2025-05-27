@@ -1,25 +1,27 @@
 package com.nav.work.models;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import lombok.Data;
-import java.util.List;
-import com.fasterxml.jackson.annotation.JsonProperty; // For next_url to nextUrl
-import lombok.Getter;
-import lombok.Setter;
 
-@JsonIgnoreProperties(ignoreUnknown = true) // Ignore unknown fields to prevent errors
-public class Feed {
+import java.util.ArrayList;
+import java.util.List;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+public class Feed
+{
+    private String id;
     private String version;
     private String title;
     private String home_page_url;
     private String feed_url;
     private String description;
-    @JsonProperty("next_url") // Map JSON next_url to nextUrl Java field
+    private List<FeedLine> items = new ArrayList<>(); //
+
+    // De følgende to variablene får @JsonProperty for å matche mot riktig felt i json objektet
+    @JsonProperty("next_url")
     private String nextUrl;
-    private String id;
-    @JsonProperty("next_id") // Map JSON next_id to nextId Java field
+    @JsonProperty("next_id")
     private String nextId;
-    private List<FeedLine> feedLines; //
 
     public void setVersion(String version) {
         this.version = version;
@@ -53,8 +55,8 @@ public class Feed {
         this.nextId = nextId;
     }
 
-    public void setFeedLines(List<FeedLine> feedLines) {
-        this.feedLines = feedLines;
+    public void setItems(List<FeedLine> items) {
+        this.items = items;
     }
 
     public String getVersion() {
@@ -89,7 +91,7 @@ public class Feed {
         return nextId;
     }
 
-    public List<FeedLine> getFeedLines() {
-        return feedLines;
+    public List<FeedLine> getItems() {
+        return items;
     }
 }

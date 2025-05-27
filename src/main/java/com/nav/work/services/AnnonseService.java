@@ -1,9 +1,9 @@
 package com.nav.work.services;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nav.work.helpers.NavHelper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-
 import com.nav.work.models.Feed;
 import com.nav.work.models.AnnonserPrUke;
 import com.nav.work.models.FeedLine;
@@ -14,7 +14,6 @@ import java.net.http.HttpResponse;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
-import java.time.temporal.WeekFields;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -26,26 +25,33 @@ public class AnnonseService
 
     private final HttpClient httpClient;
     private final TokenService tokenService;
+    private final NavHelper navHelper;
     private final String baseUrl;
+    private final String strippetBaseURI;
     private final long fetchDelayMs;
     private final int monthsBackInTime;
     private final int timeOutLimit;
     private final ObjectMapper objectMapper;
 
     private static final DateTimeFormatter HTTP_DATE_FORMATTER = DateTimeFormatter
-            .ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US) // RFC 1123
-            .withZone(ZoneId.of("Europe/Oslo")); //
+            .ofPattern("EEE, dd MMM yyyy HH:mm:ss XXXX", Locale.US) // RFC 1123
+            .withZone(ZoneId.of("Europe/Oslo"));
+
 
     public AnnonseService(HttpClient httpClient,
                           TokenService tokenService,
+                          NavHelper navHelper,
                           @Value("${nav.baseURI}") String baseUrl,
+                          @Value("${nav.strippetBaseURI}") String strippetBaseURI,
                           @Value("${nav.rateLimitDelay}") long fetchDelayMs,
                           @Value("${nav.monthsBackInTime}") int monthsBackInTime,
-                          @Value("${nav.timeOutLimit}") int timeOutLimit)
-    {
+                          @Value("${nav.timeOutLimit}") int timeOutLimit
+    ) {
         this.httpClient = httpClient;
         this.tokenService = tokenService;
+        this.navHelper = navHelper;
         this.baseUrl = baseUrl;
+        this.strippetBaseURI = strippetBaseURI;
         this.fetchDelayMs = fetchDelayMs;
         this.monthsBackInTime = monthsBackInTime;
         this.timeOutLimit = timeOutLimit;
@@ -55,12 +61,10 @@ public class AnnonseService
 
     public CompletableFuture<Collection<AnnonserPrUke>> hentAnnonserHalvtAarTilbakeITid()
     {
-        // ZonedDateTime kan brukes for å konvertere mellom tidssoner. F.eks kan et gitt tidspunkt i Oslo på en gitt dato konverteres til tilsvarende tid i f.eks Los Angeles
         ZonedDateTime sixMonthsAgoInOslo = ZonedDateTime.now(ZoneId.of("Europe/Oslo")).minusMonths(monthsBackInTime);
+        String ifModifiedSinceHeader = sixMonthsAgoInOslo.format(HTTP_DATE_FORMATTER);
 
-        String ifModifiedSinceHeader = sixMonthsAgoInOslo.format(HTTP_DATE_FORMATTER); // Formatterer dato til RFC 1123
-
-        System.out.println("Henter annonser opprettet etter: " + sixMonthsAgoInOslo + " (bruker If-Modified-Since: " + ifModifiedSinceHeader + ")"); // Updated print
+        System.out.println("Henter annonser opprettet etter: " + sixMonthsAgoInOslo + " (bruker If-Modified-Since: " + ifModifiedSinceHeader + ")");
 
         return tokenService.fetchPublicToken()
                 .thenCompose(token ->
@@ -71,39 +75,57 @@ public class AnnonseService
                     }
                     System.out.println("Token mottat, fortsetter videre");
 
-                    // Pass the If-Modified-Since header to the recursive fetching method
-                    return hentSiderRekursivt(baseUrl + "feed", token, ifModifiedSinceHeader, new ArrayList<>());
+                    return hentSiderRekursivt(strippetBaseURI + "/api/v1/feed", token, ifModifiedSinceHeader, new ArrayList<>());
                 })
                 .thenApply(allFeedLines ->
                 {
-                    // filtrerer bort KUN de som er eldre enn 6 mnd
-                    // merk at datofiltreringen som gjøres her er i tilfelle NAV bestemmer seg for å ikke lenger støtte filtrering i header
-                    List<FeedLine> filteredFeedLines = allFeedLines.stream()
-                            .filter(feedLine -> feedLine.getDate_modified() != null && feedLine.getDate_modified().isAfter(sixMonthsAgoInOslo))
+                    ZonedDateTime currentSixMonthsAgoInOslo = ZonedDateTime.now(ZoneId.of("Europe/Oslo")).minusMonths(monthsBackInTime);
+
+                    // Denne filtreringen gjøres i tilfelle header i kallet ikke klarte å filtrere på dato
+                    // I tillegg tar vi kun med de som er ACTIVE
+                    List<FeedLine> eligibleFeedLines = allFeedLines.stream()
+                            .filter(feedLine -> feedLine.get_feed_entry() != null && "ACTIVE".equalsIgnoreCase(feedLine.get_feed_entry().getStatus()))
+                            .filter(feedLine -> feedLine.getDate_modified() != null && feedLine.getDate_modified().isAfter(currentSixMonthsAgoInOslo))
                             .collect(Collectors.toList());
 
-                    System.out.println("Fullført henting, antall annonser funnet: " + filteredFeedLines.size());
-                    return processFeedLines(filteredFeedLines).values();
+
+                    // gjør en ekstra filtrering her da vi av ytelsesårsaker sjekker kun Title feltet for Java og/eller Kotlin.
+                    // "utvikler" og "backend" er tatt med da dette var en del av den initielle sjekken der jeg sjekket hver enkelt annonse som matchet filteret.
+                    // utfordringen med dette er at annonser IKKE er indeksert, og dermed tar dette kallet vesentlig lenger tid enn det opprinnelige kallet.
+                    List<FeedLine> filteredFeedLines = new ArrayList<>();
+                    StringBuilder titleLower = new StringBuilder(); // stringbuilder gjør at vi kan operere på kun ET objekt hele veien
+
+                    for (FeedLine line : eligibleFeedLines)
+                    {
+                        titleLower.setLength(0); // nuller ut sb-objektet, klar til bruk på nytt i neste loop...
+                        titleLower.append(line.getTitle().toLowerCase()); // denne kommer vi ikke unna.. toLowerCase() oppretter et String objekt..
+
+                        if (titleLower.indexOf("java") != -1 ||
+                            titleLower.indexOf("kotlin") != -1 ||
+                            titleLower.indexOf("utvikler") != -1 ||
+                            titleLower.indexOf("backend") != -1
+                        ) // bruken av indexOf gjør at vi sjekker mot byteverdier lagret i sb-objektet istedenfor å kalle på toString().toLowerCase() som ville opprettet to immutable string objekter.
+                            // objektene ville levd en stund i minnet før GC finner ut at den trenger å frigjøre minne
+                        {
+                            filteredFeedLines.add(line);
+                        }
+                    }
+
+                    System.out.println("Antall annonser etter status og dato filtering: " + filteredFeedLines.size());
+                    System.out.println("Fullført filtering. Behandler titler med match på Java og/eller Kotlin.");
+
+                    return navHelper.processFeedLines(filteredFeedLines).values();
                 })
-                .exceptionally(ex -> {
-                    System.err.println("Error during ad analysis: " + ex.getMessage());
+                .exceptionally(ex ->
+                {
+                    System.err.println("En feil skjedde under sjekk av annonser: " + ex.getMessage());
                     ex.printStackTrace();
-                    return new ArrayList<>(); // Return empty list on error
+                    return new ArrayList<>();
                 });
     }
 
-    /**
-     * Henter rekursivt alle feedsidene ved hjelp av HttpClient.sendAsync.
-     * En liten forsinkelse er lagt inn mellom hver forespørsel for å unngå å overbelaste API-et og dermed få en HTTP 429 - Too Many Request.
-     *
-     * @param currentUrl URL-en til den nåværende siden som skal hentes.
-     * @param token token for autentisering.
-     * @param ifModifiedSinceHeader Den formatert datostrengen for If-Modified-Since header
-     * @param collectedLines Liste med alle FeedLine-objekter som er funnet
-     * @return CompletableFuture som fullføres med en liste av alle FeedLine-objekter.
-     */
     private CompletableFuture<List<FeedLine>> hentSiderRekursivt(String currentUrl, String token, String ifModifiedSinceHeader, List<FeedLine> collectedLines)
-    { // Updated signature
+    {
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                 .GET()
                 .uri(URI.create(currentUrl))
@@ -112,6 +134,7 @@ public class AnnonseService
 
         if (ifModifiedSinceHeader != null && !ifModifiedSinceHeader.isEmpty())
         {
+            System.out.println("RFC 1123 dato: " + ifModifiedSinceHeader);
             requestBuilder.header("If-Modified-Since", ifModifiedSinceHeader);
         }
 
@@ -119,14 +142,12 @@ public class AnnonseService
                 .timeout(java.time.Duration.ofSeconds(timeOutLimit))
                 .build();
 
-        // Introduce a delay before making the request
         return CompletableFuture.supplyAsync(() ->
                 {
                     try
                     {
                         if (fetchDelayMs > 0)
                         {
-                            // her skjer forsinkelsen som skal forsøke å forhindre HTTP 429 - Too Many Requests
                             TimeUnit.MILLISECONDS.sleep(fetchDelayMs);
                         }
                     }
@@ -135,9 +156,9 @@ public class AnnonseService
                         Thread.currentThread().interrupt();
                         throw new RuntimeException("Thread interrupted during delay", e);
                     }
-                    return null; // brukes kun for å returnere en verdi i supplyAsync. IKKE i bruk, kun for å få kode til å kjøre :-)
-
-                }).thenCompose(ignored -> httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()))
+                    return null;
+                })
+                .thenCompose(ignored -> httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()))
                 .thenCompose(response ->
                 {
                     if (response.statusCode() == 200)
@@ -145,33 +166,22 @@ public class AnnonseService
                         try
                         {
                             Feed feed = objectMapper.readValue(response.body(), Feed.class);
-                            if (feed.getFeedLines() != null)
+                            System.out.println("Antall items: " + feed.getItems().size());
+
+                            if (feed.getItems() != null)
                             {
-                                collectedLines.addAll(feed.getFeedLines());
+                                collectedLines.addAll(feed.getItems());
                             }
 
                             if (feed.getNextUrl() != null && !feed.getNextUrl().isEmpty())
                             {
-                                // Log current page and next page
                                 System.out.println("Hentet side. Nåværende antall annonser: " + collectedLines.size() + ". Henter neste fra: " + feed.getNextUrl());
 
-                                String originalUri = "https://pam-stilling-feed.nav.no/api/v1/";
-                                String target = ".no";
+                                String domainBaseUrl = baseUrl.substring(0, baseUrl.indexOf(".no") + ".no".length());
 
-                                int index = originalUri.indexOf(target);
+                                URI nextFullUri = URI.create(domainBaseUrl).resolve(feed.getNextUrl());
 
-                                if (index != -1) {
-                                    // If ".no" is found, take the substring from the beginning up to the end of ".no"
-                                    String strippedUri = originalUri.substring(0, index + target.length());
-                                    System.out.println(strippedUri); // Output: https://pam-stilling-feed.nav.no
-                                    return hentSiderRekursivt(strippedUri + feed.getNextUrl(), token, ifModifiedSinceHeader, collectedLines);
-                                } else {
-                                    // Handle the case where ".no" is not found in the string
-                                    System.out.println("'.no' not found in the URI.");
-                                    return null;
-                                }
-
-
+                                return hentSiderRekursivt(nextFullUri.toString(), token, ifModifiedSinceHeader, collectedLines);
                             }
                             else
                             {
@@ -198,40 +208,5 @@ public class AnnonseService
                 });
     }
 
-    private TreeMap<String, AnnonserPrUke> processFeedLines(List<FeedLine> feedLines) {
-        TreeMap<String, AnnonserPrUke> weeklyCounts = new TreeMap<>();
 
-        WeekFields weekFields = WeekFields.of(Locale.getDefault());
-
-        for (FeedLine line : feedLines)
-        {
-            String content = line.getContent_text() != null ? line.getContent_text().toLowerCase(Locale.ROOT) : "";
-            String title = line.getTitle() != null ? line.getTitle().toLowerCase(Locale.ROOT) : "";
-            ZonedDateTime date = line.getDate_modified();
-
-            if (date == null)
-            {
-                continue;
-            }
-
-            int weekOfYear = date.get(weekFields.weekOfWeekBasedYear());
-            int year = date.get(weekFields.weekBasedYear());
-
-            String weekKey = String.format("%d-%02d", year, weekOfYear);
-
-            weeklyCounts.putIfAbsent(weekKey, new AnnonserPrUke(weekKey,0, 0));
-            AnnonserPrUke count = weeklyCounts.get(weekKey);
-
-            // legger opp to if'er her for de annonsene som har både Kotlin og Java i seg
-            if (content.contains("kotlin") || title.contains("kotlin"))
-            {
-                count.setAntallKotlin(count.getAntallKotlin() + 1);
-            }
-            if (content.contains("java") || title.contains("java"))
-            {
-                count.setAntallJava(count.getAntallJava() + 1);
-            }
-        }
-        return weeklyCounts;
-    }
 }

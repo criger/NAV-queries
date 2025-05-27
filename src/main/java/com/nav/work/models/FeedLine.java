@@ -1,11 +1,9 @@
 package com.nav.work.models;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import lombok.Getter;
-import lombok.Setter;
-import org.springframework.stereotype.Service;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.time.ZonedDateTime; // For date-time format
+import java.time.ZonedDateTime;
 
 @JsonIgnoreProperties(ignoreUnknown = true) // Ignore unknown fields
 public class FeedLine
@@ -15,6 +13,19 @@ public class FeedLine
     private String title;
     private String content_text;
     private ZonedDateTime date_modified;
+
+    @JsonProperty("_feed_entry")
+    private FeedEntry _feed_entry;
+
+    public FeedLine() {}
+
+    public FeedEntry get_feed_entry() {
+        return _feed_entry;
+    }
+
+    public void set_feed_entry(FeedEntry _feed_entry) {
+        this._feed_entry = _feed_entry;
+    }
 
     public String getId() {
         return id;
