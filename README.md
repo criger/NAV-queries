@@ -12,3 +12,9 @@
 * Kallet tar ca 30 sekunder med standardverdien satt i variabelen 'monthsBackInTime' i application.yaml
 * Du kan redigere 'monthsBackInTime' i application.yaml for å hente mindre antall måneder tilbake i tid
 * Standardverdi på 'monthsBackInTime' er satt til 6, som betyr at den henter alle annonser 6 måneder tilbake i tid fra dagens dato
+
+**Decisive**
+Du kan forvente å få i oppgave å lage kode for å hente data fra NAV i teknisk intervju hos Decisive  
+Værsågod, bare bruk koden :-)  
+
+___Your friendly neighbourhood developer___
